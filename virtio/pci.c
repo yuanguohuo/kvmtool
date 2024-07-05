@@ -14,6 +14,72 @@
 #include <assert.h>
 #include <string.h>
 
+//Yuanguo: 关于"MSI", "GSI", "IRQ"等概念（摘自https://stackoverflow.com/questions/45206171/how-sci-system-control-interrupt-vector-is-defined）
+//
+// 一. 如何产生IRQ:
+//
+//     The two standard interrupt controllers on an x86 system are:
+//
+//         1. The 8259A PIC
+//            There are always two PICs, at standard IO addresses, each with eight input pins (IR 0-7). One PIC is the master and handles IRQ 0-7. The other
+//            is the slave and handles IRQ 8-15, its output goes to IR2 of the master. (slave的输出连接到master的IR2引脚上).
+//
+//         2. The IO APIC (Do not confuse the IO APIC with the LAPIC)
+//            There can be one or multiple IO APICs, all mapped at memory addresses, each with a variable number of input pins INTINx. Usually, one of the IO
+//            APIC is wired and configured to emulate the PICs, INTIN0-15 are mapped to IRQ0-15 but this is not a requirement.
+//
+//     还有一个不是interrupt controller但和interrupt controller作用一样的东西，就是:
+//
+//         3. Message signalled interrupts (MSI)
+//            This is not an interrupt controller, but it's worth mentioning. The 8259A PIC was the first generation controller, the IO APIC the second and
+//            MSIs are the third. They are implemented as writes to specific memory addresses and as such require no controller.
+//            On an x86 system, a PCI(e) device is configured to do a write into the LAPIC dedicated area.
+//
+//            也就是说，PCI(e)设备通过在LAPIC dedicated memory area直接写入，来"触发"中断。Yuanguo: 写入的是什么？应该是GSI(待确认).
+//
+// 二. IRQ映射到INT (中断向量interrupt vector)
+//
+//     The interrupt controllers are configured, along with the LAPIC, to map an IRQ number into a vector number.
+//     Once one knows the IRQ number it is easy to get the INT number, the OS generally can easily make a table for that purpose since it is well known how
+//     the interrupt controllers are connected to the CPUs.
+//
+//     至此，有两级关系：
+//           IRQ <----> INT
+//
+// 三. 如何给device分配IRQ (interrupt routing, GSI)
+//
+//     Associating an IRQ to a device (a process known as interrupt routeing) is very complex because it requires a knowledge of how devices are connected, the
+//     ACPI specification (注意ACPI不是APIC) use GSIs (Global System Interrupt) to simplify this aspect.
+//
+//     忽略细节，设备被分配的是GSI (GSI映射到IRQ，IRQ再映射到INT).
+//
+// 四. GSI映射到IRQ
+//
+//     In the end, GSIs (or in ACPI words, system vectors) must be mapped to IRQs
+//
+//         1. 8259A PIC
+//            the GSIs map directly to ISA IRQs. Thus, IRQ 0 is GSI 0, etc.
+//
+//         2. IO APIC
+//            Each IO APIC is assigned a base GSI by the BIOS. Each input pin on the IO APIC is mapped to a GSI number by adding the pin number (zero-based) to the base GSI.
+//            Thus, if an IO APIC has a base GSI of N, pin 0 on that IO APIC has a GSI of N, pin 1 has a GSI of N + 1, etc.
+//            The IO APIC with a base GSI of 0 maps the ISA IRQs onto its first 16 input pins.
+//
+//     总的映射关系是:
+//
+//             GSI        <---->   IRQ     <---->           INT
+//        System vector                                Interrupt vector
+//
+//     注意：system vector (GSI) 不要和interrupt vector (INT) 搞混淆。
+//
+// 五. 名词
+//
+//     PIC:  Programmable Interrupt Controller, 特指8259A.
+//     APIC: Advanced PIC (Advanced Programmable Interrupt Controller)
+//     ACPI: Advanced Configuration and Power Interface. 是一个specification，包含很多东西，其中一个是使用GSI来进行interrupt routing
+//     Interrupt vector: Intel的叫法，INT
+//     System vector: GSI number
+
 /* The bit of the ISR which indicates a queue change. */
 #define VIRTIO_PCI_ISR_QUEUE	0x1
 
