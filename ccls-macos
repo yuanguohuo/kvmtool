@@ -1,0 +1,5 @@
+clang
+%c -std=c11
+-isysroot
+/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+-I./include

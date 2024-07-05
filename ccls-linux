@@ -1,0 +1,5 @@
+clang
+%c -std=c11
+-isystem
+/usr/include
+-I./include
