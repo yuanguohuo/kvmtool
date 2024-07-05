@@ -16,6 +16,13 @@
 
 //Yuanguo: 关于"MSI", "GSI", "IRQ"等概念（摘自https://stackoverflow.com/questions/45206171/how-sci-system-control-interrupt-vector-is-defined）
 //
+// 名词:
+//     PIC:  Programmable Interrupt Controller, 特指8259A.
+//     APIC: Advanced PIC (Advanced Programmable Interrupt Controller)
+//     ACPI: Advanced Configuration and Power Interface. 是一个specification，包含很多东西，其中一个是使用GSI来进行interrupt routing
+//     Interrupt vector number: Intel的叫法，INT，就是指向IDT中的一个条目的index；
+//     System vector number: GSI number
+//
 // 一. 如何产生IRQ:
 //
 //     The two standard interrupt controllers on an x86 system are:
@@ -24,34 +31,24 @@
 //            There are always two PICs, at standard IO addresses, each with eight input pins (IR 0-7). One PIC is the master and handles IRQ 0-7. The other
 //            is the slave and handles IRQ 8-15, its output goes to IR2 of the master. (slave的输出连接到master的IR2引脚上).
 //
-//         2. The IO APIC (Do not confuse the IO APIC with the LAPIC)
+//         2. The IO APIC (Do not confuse the IO APIC with the LAPIC, 即Local-APIC, CPU core内集成的APIC)
 //            There can be one or multiple IO APICs, all mapped at memory addresses, each with a variable number of input pins INTINx. Usually, one of the IO
 //            APIC is wired and configured to emulate the PICs, INTIN0-15 are mapped to IRQ0-15 but this is not a requirement.
 //
-//     还有一个不是interrupt controller但和interrupt controller作用一样的东西，就是:
+// 二. IRQ映射到INT (interrupt vector number, 指向IDT中某个条目的index)
 //
-//         3. Message signalled interrupts (MSI)
-//            This is not an interrupt controller, but it's worth mentioning. The 8259A PIC was the first generation controller, the IO APIC the second and
-//            MSIs are the third. They are implemented as writes to specific memory addresses and as such require no controller.
-//            On an x86 system, a PCI(e) device is configured to do a write into the LAPIC dedicated area.
-//
-//            也就是说，PCI(e)设备通过在LAPIC dedicated memory area直接写入，来"触发"中断。Yuanguo: 写入的是什么？应该是GSI(待确认).
-//
-// 二. IRQ映射到INT (中断向量interrupt vector)
-//
-//     The interrupt controllers are configured, along with the LAPIC, to map an IRQ number into a vector number.
+//     The interrupt controllers are configured to map an IRQ number into a vector number.
 //     Once one knows the IRQ number it is easy to get the INT number, the OS generally can easily make a table for that purpose since it is well known how
 //     the interrupt controllers are connected to the CPUs.
 //
 //     至此，有两级关系：
 //           IRQ <----> INT
 //
-// 三. 如何给device分配IRQ (interrupt routing, GSI)
+// 三. 如何给device关联一个IRQ (interrupt routing, GSI)
 //
-//     Associating an IRQ to a device (a process known as interrupt routeing) is very complex because it requires a knowledge of how devices are connected, the
-//     ACPI specification (注意ACPI不是APIC) use GSIs (Global System Interrupt) to simplify this aspect.
-//
-//     忽略细节，设备被分配的是GSI (GSI映射到IRQ，IRQ再映射到INT).
+//     Associating an IRQ to a device (a process known as interrupt routeing) is very complex because it requires a knowledge of how devices are connected.
+//     The ACPI specification (注意ACPI不是APIC) use GSIs (Global System Interrupt) to simplify this aspect.
+//     忽略细节，先给设备关联一个GSI，再把GSI映射到IRQ (IRQ再映射到INT).
 //
 // 四. GSI映射到IRQ
 //
@@ -72,13 +69,21 @@
 //
 //     注意：system vector (GSI) 不要和interrupt vector (INT) 搞混淆。
 //
-// 五. 名词
+//  五. Message Signaled Interrupts (MSI)
 //
-//     PIC:  Programmable Interrupt Controller, 特指8259A.
-//     APIC: Advanced PIC (Advanced Programmable Interrupt Controller)
-//     ACPI: Advanced Configuration and Power Interface. 是一个specification，包含很多东西，其中一个是使用GSI来进行interrupt routing
-//     Interrupt vector: Intel的叫法，INT
-//     System vector: GSI number
+//     上面说的一切都是传统中断，而MSI是一种平替传统中断的新中断机制... The 8259A PIC was the first generation controller, the IO APIC the second, and MSIs are the third.
+//
+//     Traditionally, a device has an interrupt line (pin) which it asserts when it wants to signal an interrupt to the host processing environment. This traditional form of
+//     interrupt signalling is an out-of-band form of control signalling since it uses a dedicated path to send such control information, separately from the main data path.
+//
+//     MSI replaces those dedicated interrupt lines with in-band signalling, by exchanging special messages that indicate interrupts through the main data path. In particular,
+//     MSI allows the device to write a small amount of interrupt-describing data to a special memory-mapped I/O address (CPU core内集成的Local-APIC的寄存器，被map到main memory
+//     的特定地址), and the chipset then delivers the corresponding interrupt to a processor.
+//
+//     On Intel x86 systems, the Local-APIC (LAPIC) must be enabled for the PCI (and PCIe) MSI/MSI-X to work, even on uniprocessor (single core) systems. In these systems,
+//     MSIs are handled by writing the interrupt vector directly into the LAPIC of the processor/core that needs to service the interrupt. 
+//
+//     As an example, PCI Express does not have separate interrupt pins at all; instead, it uses special in-band messages to allow pin assertion or deassertion to be emulated.
 
 /* The bit of the ISR which indicates a queue change. */
 #define VIRTIO_PCI_ISR_QUEUE	0x1
