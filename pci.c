@@ -283,6 +283,12 @@ static void pci_config_bar_wr(struct kvm *kvm,
 	 * the BAR. This means that the BAR value that kvmtool should return is
 	 * B = ~(S - 1).
 	 */
+    //Yuanguo:
+    //  在真实环境下，PCI设备的每个BAR region的size是hard wired的，BIOS想要查
+    //  一个BAR region的size，就往对应BAR寄存处写0xffffffff，然后再读回该BAR寄
+    //  存器。
+    //  若BAR region的size是S，那么读回的值B = ~(S - 1)
+    //  BIOS就知道S = ~B + 1
 	if (value == 0xffffffff) {
 		value = ~(pci__bar_size(pci_hdr, bar_num) - 1);
 		/* Preserve the special bits. */
@@ -504,21 +510,142 @@ int pci__init(struct kvm *kvm)
 {
 	int r;
 
+    //Yuanguo:
+    //
+    // 一个物理PCI设备(物理卡)可能包含多个PCI function，一个PCI function是一个逻辑PCI设备，对OS而言，就是一个PCI设备。所以
+    // 每个PCI function有自己独立的configuration space。
+    // 下面说PCI设备，要是说它的configuration space，其实是指逻辑设备，即PCI function; 要是说硬件设备，其实是指物理卡。
+    //
+    // 真实环境下，BIOS/OS通过PCI_CONFIG_ADDRESS和PCI_CONFIG_DATA这两个port读写所有PCI function的所有configuration space
+    // 寄存器，包括endpoint设备、PCI-to-PCI bridge(switch的port)。PCI_CONFIG_ADDRESS和PCI_CONFIG_DATA是PCI specification
+    // 定义的，所以值是固定的。
+    //
+    // 具体地，
+    //
+    //     1. 先往 PCI_CONFIG_ADDRESS 写入目标寄存器的地址。
+    //        因为目标寄存器可能是任何PCI function的任何寄存器，所以地址
+    //        必须包含Bus#, Device#, Function#以及Register#
+    //
+    //         31                     24 23                    16 15           11 10      8 7                2   1   0
+    //        +---+---------------------+------------------------+---------------+---------+------------------+---+---+
+    //        |   |     Reserved        |          Bus#          |    Device#    |  Func#  |    Register#     | 0 | 0 |
+    //        +---+---------------------+------------------------+---------------+---------+------------------+---+---+
+    //          ^
+    //          |
+    //          Enable bit: 1=enabled 0=disbled
+    //
+    //     2. 然后读写PCI_CONFIG_DATA，就是读写目标寄存器。
+    //
+    // Bus enumeration也是通过这两个port完成的。
+    //
+    // 引用维基百科：
+    //     When the computer is powered on, the PCI bus(es) and device(s) must be enumerated by BIOS or operating system.
+    //     Bus enumeration is performed by attempting to access the PCI configuration space registers for each buses, devices
+    //     and functions. Note that device number, different from VID and DID, is merely a device's sequential number on that
+    //     bus. Moreover, after a new bridge is detected, a new bus number is defined, and device enumeration restarts at device
+    //     number zero.
+    //     If no response is received from the device's function #0, the bus master performs an abort and returns an all-bits-on
+    //     value (FFFFFFFF in hexadecimal), which is an invalid VID/DID value, thus the BIOS or operating system can tell that the
+    //     specified combination bus/device_number/function (B/D/F) is not present. In this case, reads to the remaining functions
+    //     numbers (1–7) are not necessary as they also will not exist.
+    //
+    // BIOS/OS遍历各个bus以及bus上的slot；同时顺序分配bus#和device# (即从bus0开始，对于每个bus，从device0开始，以此循环...)
+    // 对于一个bus上的一个slot，当前分配到busX, deviceY:
+    //
+    //     - 往PCI_CONFIG_ADDRESS 写入 0x80000000 | busX << 16 | deviceY << 11 | 0(function#) | VendorID-DeviceID Register#
+    //     - 读PCI_CONFIG_DATA
+    //
+    // 若slot上没有设备，读到的数据是0xFFFFFFFF(非法VendorID/DeviceID)，继续下一个slot ...
+    // 若slot上有设备(设备必须有function0，PCI规范要求的)，它就会响应，返回自己的VendorID/DeviceID。表示扫描到一个PCI设备，这个PCI设备
+    // 也就被分配到busX:deviceY；它若有多个function, function#分别是0, 1, 2, ... 它也可能是一个PCI-to-PCI bridge(switch的port)，这样就
+    // 产生一个新的bus。
+    //
+    // 问：slot上的设备如何决定自己要不要响应呢？这时设备还不知道自己将要分配到busX:deviceY，它响应之后才算分配到。这不是
+    //       "鸡生蛋-蛋生鸡"的问题吗？
+    // 答：这是硬件实现的。设备决定是否响应，不是看busX:deviceY是否指向自己(因为还没分配)，而是靠物理信号Initialization Device Select (IDSEL)，
+    //     应该是此时硬件保证只有这个slot的IDSEL被点亮。设备只解析0-10bit，看目标是哪个function的哪个register。
+    //     不止Bus enumeration时，以后任何对configuration space register的访问，设备都不是看busX:deviceY是否指向自己，都是靠IDSEL信号。
+    //
+    // 在虚拟环境下:
+    //     1. VMM kvmtool根据user的命令行参数直接虚拟好PCI设备列表(相当于物理连接)，等着guest(BIOS/OS)来enumerate；
+    //     2. 确实是靠对比bus#:device#判断指向哪个PCI设备(因为事先分配好了bus#:device#)，见pci__config_rd()和pci__config_wr()函数。
+    //
+    // kvmtool只虚拟出一条PCI bus，也没有明确bus#; 对比的时候，肯定是匹配的.
+    // 为每个PCI设备(PCI function)分配device#，见devices.c : device__register().
+    //
+    // Bus enumeration的时候:
+    //     - guest BIOS/OS往PCI_CONFIG_ADDRESS写入bus#:device#:function#:register#，会调用下面注册的pci_config_address_mmio()，保存到全局
+    //       变量pci_config_address_bits.
+    //     - 然后来读PCI_CONFIG_DATA，会调用下面注册的pci_config_data_mmio()，进而调用pci__config_rd(). 若有匹配的bus#:device#，则返回对应
+    //       的configuration space register的值；否则返回0xffffffff. 注意：bus#的匹配实际上是拿pci_config_address_bits中的bus_number自己
+    //       和自己匹配(因为kvmtool没有模拟多个bus).
+
+    //Yuanguo:
+    //  注册一个callback：[PCI_CONFIG_DATA, PCI_CONFIG_DATA+4字节) => pci_config_data_mmio
+    //  当VM对这个地址空间发生读写时，就会导致vmexit；进而进入VMM(kvmtool)，调用pci_config_data_mmio函数.
 	r = kvm__register_pio(kvm, PCI_CONFIG_DATA, 4,
 				 pci_config_data_mmio, NULL);
 	if (r < 0)
 		return r;
+    //Yuanguo:
+    //  注册一个callback：[PCI_CONFIG_ADDRESS, PCI_CONFIG_ADDRESS+4字节) => pci_config_address_mmio
+    //  当VM对这个地址空间发生读写时，就会导致vmexit；进而进入VMM(kvmtool)，调用pci_config_address_mmio函数.
+    //  看pci_config_address_mmio的实现：
+    //      - 拿全局变量pci_config_address_bits模拟VM的[PCI_CONFIG_ADDRESS, PCI_CONFIG_ADDRESS+4字节)区间；
+    //      - VM写[PCI_CONFIG_ADDRESS, PCI_CONFIG_ADDRESS+4字节)里的第几字节，就写到pci_config_address_bits里的第几字节；
+    //      - 读也一样；
 	r = kvm__register_pio(kvm, PCI_CONFIG_ADDRESS, 4,
 				 pci_config_address_mmio, NULL);
 	if (r < 0)
 		goto err_unregister_data;
 
+    //Yuanguo:
+    //  上面说，BIOS/OS读写任意PCI设备的任意configuration space register需要两次port io：先写PCI_CONFIG_ADDRESS锁定目标，再写数据PCI_CONFIG_DATA。
+    //  这是legacy method，是original PCI的方式。因为一次读写要两次port io，所以it is referred to as "indirection".
+    //  这种方式也叫做Configuration Access Mechanism (CAM).
+    //
+    //  下面这种方式was created for PCI Express，是一种新的方式，叫做Enhanced Configuration Access Mechanism (ECAM)。效果和上面的方法等价，都是读写
+    //  任意PCI设备(PCI function)的任意configuration space register。只不过
+    //     - ECAM是通过一次IO完成的，更便捷;
+    //     - ECAM能访问更大的空间。对于一个PCI设备(PCI function)，Legacy CAM只能访问256B  configuration space (因为PCI的设备，configuration就是256B).
+    //       PCIe设备(PCIe function)的configuration space是4K，所以要访问256B之后的部分，只能通过ECAM;
+    //
+    //  Enhanced Configuration Access Mechanism (ECAM):
+    //      - 通过内存映射的方式，直接读写任意PCI设备(PCI function)的任意register；要访问某个PCI function的某个register, 直接读写它的address;
+    //      - 关键是address怎么来的？大概是这样：
+    //          - On x86 and x64 platforms, ACPI(Advanced Configuration and Power Interface)有一个'MCFG' table, table中有MMIO_Starting_Physical_Address，
+    //            这就是base address of the ECAM region.
+    //          - 有了base address，给定PCI function的给定register的address = MMIO_Starting_Physical_Address + ((Bus) << 20 | Device << 15 | Function << 12)
+    //
+    //  对于kvmtool：貌似KVM_PCI_CFG_AREA就是MMIO_Starting_Physical_Address，对于x86而言，定义在x86/include/kvm/kvm-arch.h中。
+    //  遗留问题：guest怎么知道这个地址的？它需要这个base address来构造configuration space register的address。可能是架构定死的？arm和riscv也有这个宏的定义。
 	r = kvm__register_mmio(kvm, KVM_PCI_CFG_AREA, PCI_CFG_SIZE, false,
 			       pci_config_mmio_access, kvm);
 	if (r < 0)
 		goto err_unregister_addr;
 
 	return 0;
+
+    //Yuanguo:
+    //
+    //  小结:
+    //     - 真实环境中，BIOS/OS需要能够读写系统中任意PCI设备(PCI function)的任意configuration space register, 就是通过CAM/ECAM完成的。能够读写所有configuration
+    //       space register，就能够enumerate系统中所有PCI设备(PCI function)，并对它们进行配置，包括配置它们的BAR region。
+    //     - 本函数模拟CAM/ECAM功能。有了这个功能，虚拟的guest BIOS/OS也就可以读写任意虚拟PCI设备的任意configuration space register，进而能够enumerate虚拟系统中的
+    //       虚拟PCI设备，并对它们进行配置。不过，虚拟PCI设备的BAR region好像是kvmtool预先设置的，而不是guest BIOS/OS配置的，见 virtio/pci.c : virtio_pci__init()
+    //
+    //  注意本函数和virtio/pci.c : virtio_pci__init()的关系：
+    //     - 相同点：都注册了一些callback，在guest访问某些memory的时候触发；
+    //     - 不同点：本函数针对的是虚拟guest中所有虚拟PCI设备(PCI function)的configuration space; virtio_pci__init针对的是PCI设备的bar region; 即
+    //         - guest系统enumerate或者配置PCI设备，触发本函数注册的callback；
+    //         - guest系统访问某个PCI设备，例如访问网卡，触发virtio_pci__init注册的callback;
+    //     - 另外：virtio_pci__init构造虚拟PCI设备，等着guest来enumerate, 顺序是这样的：
+    //         1. 调用本函数注册CAM/ECAM callback;
+    //         2. 调用virtio_pci__init：
+    //              - 构造虚拟PCI设备；
+    //              - 为虚拟PCI设备注册BAR region callback：用于设备的中断配置、正常读写。
+    //         3. 本函数注册的CAM/ECAM callback被触发，完成enumerate以及一些配置；
+    //         4. virtio_pci__init注册的BAR region callback被触发，完成PCI设备的中断配置、正常读写。
 
 err_unregister_addr:
 	kvm__deregister_pio(kvm, PCI_CONFIG_ADDRESS);

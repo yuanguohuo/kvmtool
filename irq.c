@@ -28,6 +28,12 @@ int irq__get_nr_allocated_lines(void)
 	return next_line - KVM_IRQ_OFFSET;
 }
 
+//Yuanguo:
+//  本函数被调用之后，保证irq_routing->nr指向的entry可用，它就是新创建的entry;
+//  所以，调用者可以通过
+//        &irq_routing->entries[irq_routing->nr]
+//  得到新建的entry。
+//  可想而知，调用者还需要"递增irq_routing->nr"，表示他已经占用了irq_routing->nr指向的entry, 后续调用者只能占用下一个entry；
 int irq__allocate_routing_entry(void)
 {
 	size_t table_size = sizeof(struct kvm_irq_routing);

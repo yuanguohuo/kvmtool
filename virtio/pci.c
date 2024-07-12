@@ -420,6 +420,10 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 
 	BUILD_BUG_ON(!is_power_of_two(PCI_IO_SIZE));
 
+    //Yuanguo:
+    //  在物理环境下，bar-region的base addr是BIOS或者OS分配的，然后写入pci设备的bar；
+    //  在虚拟环境下，bar-region的base addr貌似是VMM(qemu, kvmtool)分配的；
+    //  物理环境下，是BIOS配置，OS来读(一般情况OS不用配置)；虚拟环境下，VMM取代BIOS直接配置？
 	port_addr = pci_get_io_port_block(PCI_IO_SIZE);
 	mmio_addr = pci_get_mmio_block(PCI_IO_SIZE);
 	msix_io_block = pci_get_mmio_block(VIRTIO_MSIX_BAR_SIZE);
@@ -448,6 +452,12 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 		.bar_size[2]		= cpu_to_le32(VIRTIO_MSIX_BAR_SIZE),
 	};
 
+    //Yuanguo: guest对bar-region的访问(读写)会导致vmexit；
+    //   vmexit发生时，VMM(qemu, kvmtool)看访问的是哪个bar-region，然后调用对应的callback去处理；
+    //   这里是为不同的bar-region注册不同的callback;
+    //           port-mapped io region   : virtio_pci_legacy__io_mmio_callback
+    //           memory-mapped io region : virtio_pci_modern__io_mmio_callback (pci access主要是通过这个callback进行的，包括配置MSI中断)
+    //           msix_io region          : virtio_pci__msix_mmio_callback      (update MSI中断配置?)
 	r = pci__register_bar_regions(kvm, &vpci->pci_hdr,
 				      virtio_pci__bar_activate,
 				      virtio_pci__bar_deactivate, vdev);
