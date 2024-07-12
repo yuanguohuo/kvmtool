@@ -3,3 +3,4 @@ clang
 -isysroot
 /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
 -I./include
+-I./x86/include

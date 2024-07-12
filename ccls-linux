@@ -3,3 +3,4 @@ clang
 -isystem
 /usr/include
 -I./include
+-I./x86/include
