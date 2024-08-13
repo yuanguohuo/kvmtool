@@ -15,6 +15,12 @@
 #define KVM_32BIT_GAP_SIZE	(768 << 20)
 #define KVM_32BIT_GAP_START	(KVM_32BIT_MAX_MEM_SIZE - KVM_32BIT_GAP_SIZE)
 
+//Yuanguo:
+//    KVM_MMIO_START        = 0xd0000000
+//    KVM_PCI_CFG_AREA      = 0xd1000000
+//    KVM_PCI_MMIO_AREA     = 0xd2000000
+//    KVM_VIRTIO_MMIO_AREA  = 0xd3000000
+
 #define KVM_MMIO_START		KVM_32BIT_GAP_START
 
 /* This is the address that pci_get_io_port_block() starts allocating

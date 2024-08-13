@@ -524,12 +524,13 @@ int pci__init(struct kvm *kvm)
     //
     //     1. 先往 PCI_CONFIG_ADDRESS 写入目标寄存器的地址。
     //        因为目标寄存器可能是任何PCI function的任何寄存器，所以地址
-    //        必须包含Bus#, Device#, Function#以及Register#
+    //        必须包含Bus#, Device#, Function#以及offset. Offset是在configuration space内的偏移，以Byte为单位；
+    //        若舍弃offset的最后2bit，则刚好得到Register#，因为每个Register是4字节。
     //
-    //         31                     24 23                    16 15           11 10      8 7                2   1   0
-    //        +---+---------------------+------------------------+---------------+---------+------------------+---+---+
-    //        |   |     Reserved        |          Bus#          |    Device#    |  Func#  |    Register#     | 0 | 0 |
-    //        +---+---------------------+------------------------+---------------+---------+------------------+---+---+
+    //          31 30                 24 23                    16 15           11 10      8 7                        0
+    //        +---+---------------------+------------------------+---------------+---------+--------------------------+
+    //        |   |     Reserved        |          Bus#          |    Device#    |  Func#  |          offset          |
+    //        +---+---------------------+------------------------+---------------+---------+--------------------------+
     //          ^
     //          |
     //          Enable bit: 1=enabled 0=disbled
@@ -552,7 +553,7 @@ int pci__init(struct kvm *kvm)
     // BIOS/OS遍历各个bus以及bus上的slot；同时顺序分配bus#和device# (即从bus0开始，对于每个bus，从device0开始，以此循环...)
     // 对于一个bus上的一个slot，当前分配到busX, deviceY:
     //
-    //     - 往PCI_CONFIG_ADDRESS 写入 0x80000000 | busX << 16 | deviceY << 11 | 0(function#) | VendorID-DeviceID Register#
+    //     - 往PCI_CONFIG_ADDRESS 写入 0x80000000 | busX << 16 | deviceY << 11 | function#=0 | offset=0
     //     - 读PCI_CONFIG_DATA
     //
     // 若slot上没有设备，读到的数据是0xFFFFFFFF(非法VendorID/DeviceID)，继续下一个slot ...
@@ -640,8 +641,8 @@ int pci__init(struct kvm *kvm)
     //         - guest系统enumerate或者配置PCI设备，触发本函数注册的callback；
     //         - guest系统访问某个PCI设备，例如访问网卡，触发virtio_pci__init注册的callback;
     //     - 另外：virtio_pci__init构造虚拟PCI设备，等着guest来enumerate, 顺序是这样的：
-    //         1. 调用本函数注册CAM/ECAM callback;
-    //         2. 调用virtio_pci__init：
+    //         1. 调用本函数注册CAM/ECAM callback(只调用一次);
+    //         2. 调用virtio_pci__init(每个PCI设备调用一次)：
     //              - 构造虚拟PCI设备；
     //              - 为虚拟PCI设备注册BAR region callback：用于设备的中断配置、正常读写。
     //         3. 本函数注册的CAM/ECAM callback被触发，完成enumerate以及一些配置；

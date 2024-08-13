@@ -116,7 +116,14 @@ struct msix_cap {
 	u8 cap;
 	u8 next;
 	u16 ctrl;
+    //Yuanguo: BAR Indicator register，简称BIR，位于PCIe device的configuration space的capability中(不是header中)；
+    //    - 最低3位表示哪个BAR的region用于存table；
+    //    - 高29位表示table在BAR region中的offset;
 	u32 table_offset;
+    //Yuanguo: BAR Indicator register，简称BIR，位于PCIe device的configuration space的capability中(不是header中)；
+    //    - 最低3位表示哪个BAR的region用于存PBA；
+    //    - 高29位表示PBA在BAR region中的offset;
+    //PBA: Pending Bit Array, one bit per vector
 	u32 pba_offset;
 };
 
@@ -218,6 +225,8 @@ struct pci_device_header {
 			u8		irq_pin;
 			u8		min_gnt;
 			u8		max_lat;
+            //Yuanguo: 上面一共是64字节，也就是PCI的标准header；下面是扩展区，一般用于存capability list;
+            //  第一个capability是MSI-X;
 			struct msix_cap msix;
 			/* Used only by architectures which support PCIE */
 			struct pci_exp_cap pci_exp;

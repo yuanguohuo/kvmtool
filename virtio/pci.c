@@ -46,7 +46,7 @@
 //
 // 三. 如何给device关联一个IRQ (interrupt routing, GSI)
 //
-//     Associating an IRQ to a device (a process known as interrupt routeing) is very complex because it requires a knowledge of how devices are connected.
+//     Associating an IRQ to a device (a process known as interrupt routing) is very complex because it requires a knowledge of how devices are connected.
 //     The ACPI specification (注意ACPI不是APIC) use GSIs (Global System Interrupt) to simplify this aspect.
 //     忽略细节，先给设备关联一个GSI，再把GSI映射到IRQ (IRQ再映射到INT).
 //
@@ -67,7 +67,7 @@
 //             GSI        <---->   IRQ     <---->           INT
 //        System vector                                Interrupt vector
 //
-//     注意：system vector (GSI) 不要和interrupt vector (INT) 搞混淆。
+//     注意：System vector (GSI) 不要和Interrupt vector (INT) 搞混淆。
 //
 //  五. Message Signaled Interrupts (MSI)
 //
@@ -77,13 +77,26 @@
 //     interrupt signalling is an out-of-band form of control signalling since it uses a dedicated path to send such control information, separately from the main data path.
 //
 //     MSI replaces those dedicated interrupt lines with in-band signalling, by exchanging special messages that indicate interrupts through the main data path. In particular,
-//     MSI allows the device to write a small amount of interrupt-describing data to a special memory-mapped I/O address (CPU core内集成的Local-APIC的寄存器，被map到main memory
-//     的特定地址), and the chipset then delivers the corresponding interrupt to a processor.
+//     MSI allows the device to write a small amount of interrupt-describing data to a special memory-mapped I/O address (CPU core内集成的Local-APIC的寄存器，被map到特定memory
+//     address), and the chipset then delivers the corresponding interrupt to a processor.
 //
 //     On Intel x86 systems, the Local-APIC (LAPIC) must be enabled for the PCI (and PCIe) MSI/MSI-X to work, even on uniprocessor (single core) systems. In these systems,
 //     MSIs are handled by writing the interrupt vector directly into the LAPIC of the processor/core that needs to service the interrupt. 
 //
 //     As an example, PCI Express does not have separate interrupt pins at all; instead, it uses special in-band messages to allow pin assertion or deassertion to be emulated.
+//
+//  六. How MSI-X Works
+//
+//     There is no interrupt PIN for PCIe interrupt. When device wants to raise an interrupt, an interrupt message is sent to host via inband PCIe channels.  The interrupt
+//     message is a write command, destination of the write is to the host memory specified by the HOST.
+//
+//     The host specifies the destination address of the interrupt message at the MSI-X table. I believe the MSI-X table is setup by the OS boot up normally.
+//
+//     On X86 platform, the interrupt message is written to LAPIC (Local component of Advanced Programmable Interrupt Controller), usually integrated into the processor
+//     itself. 即前面说的：CPU core内集成的Local-APIC的寄存器，被map到特定memory address.
+//
+//     On ARM platform, the interrupt message is written to ARM Generic Interrupt Controller(GIC), GIC's LPI (Locality-specific Peripheral Interrupts) and ITS(Interrupt
+//     Translation Service) support MSI-X messages.
 
 /* The bit of the ISR which indicates a queue change. */
 #define VIRTIO_PCI_ISR_QUEUE	0x1
@@ -248,6 +261,7 @@ static void virtio_pci__msix_mmio_callback(struct kvm_cpu *vcpu,
 
 	BUILD_BUG_ON(VIRTIO_NR_MSIX > (sizeof(vpci->msix_pba) * 8));
 
+    //Yuanguo: 最低3bit表示哪个BAR用于MSI-X PBA，& ~PCI_MSIX_TABLE_BIR (0x07)得到真实偏移;
 	pba_offset = vpci->pci_hdr.msix.pba_offset & ~PCI_MSIX_TABLE_BIR;
 	if (addr >= msix_io_addr + pba_offset) {
 		/* Read access to PBA */
@@ -445,7 +459,9 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 							| PCI_BASE_ADDRESS_SPACE_MEMORY),
 		.bar[2]			= cpu_to_le32(msix_io_block
 							| PCI_BASE_ADDRESS_SPACE_MEMORY),
+		//Yuanguo: 设置支持Capability List; PCI_STATUS_CAP_LIST=0x10.
 		.status			= cpu_to_le16(PCI_STATUS_CAP_LIST),
+		//Yuanguo: .capabilities=65. Capability List的头在第65字节处，即第一个capability是msix；每个capability有一个next，是下一个capability的offset;
 		.capabilities		= PCI_CAP_OFF(&vpci->pci_hdr, msix),
 		.bar_size[0]		= cpu_to_le32(PCI_IO_SIZE),
 		.bar_size[1]		= cpu_to_le32(PCI_IO_SIZE),
@@ -469,6 +485,13 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 		.data			= &vpci->pci_hdr,
 	};
 
+    //Yuanguo:
+    //  quest读PCI设备的configuration space:
+    //      - 从.status知道启用了Capability List；
+    //      - 从.capabilities知道第一个capability在configuration space的哪个位置；
+    //  读到第一个capability之后，就知道这个capability是PCI_CAP_ID_MSIX，以及其他详细信息:
+    //      - MSI-X Table Size: 读到的msix.ctrl再加1；
+    //      - BAR-2 region的布局，如下所示；
 	vpci->pci_hdr.msix.cap = PCI_CAP_ID_MSIX;
 	vpci->pci_hdr.msix.next = 0;
 	/*
@@ -486,6 +509,32 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 	vpci->pci_hdr.msix.ctrl = cpu_to_le16(VIRTIO_NR_MSIX - 1);
 
 	/* Both table and PBA are mapped to the same BAR (2) */
+    //Yuanguo: table_offset和pba_offset的最低3bit都是2，表示vector table和PBA都使用BAR-2;
+    //         也可以使用不同BAR；
+    //Yuanguo:
+    //
+    //
+    //                 BAR-2 region (在guest的地址空间中)
+    //
+    // base address --> +--------------------------+ <-- table_offset = cpu_to_le32(2)
+    //                  |                          |     末尾的3bit=2表示BAR-2用于MSI-X vector table，& ~PCI_MSIX_TABLE_BIR (0x07)得到真实偏移0x0;
+    //                  |  VIRTIO_NR_MSIX(=33)个   |
+    //                  | struct msix_table结构体  |
+    //                  |                          |
+    //                  ...          ...         ...
+    //                  |                          |
+    //                  |                          |
+    //                  +--------------------------+ <-- pba_offset = cpu_to_le32(2 | VIRTIO_MSIX_TABLE_SIZE)
+    //                  |                          |     末尾的3bit=2表示BAR-2用于MSI-X PBA，& ~PCI_MSIX_TABLE_BIR (0x07)得到真实偏移;
+    //                  |                          |
+    //                  |                          |
+    //                  |                          |
+    //                  |                          |
+    //                  +--------------------------+
+    // msix.table_offset和msix.pba_offset 是configuration space中的两个寄存器(在capability中，不是header中)，叫做BAR Indicator register，简称BIR
+    // 它们分别用来表示table和pba在哪个BAR region中(最低3bit)，以及在BAR region中的offset(高29位).
+    // table和pba可以在同一个BAR region中，也可以在不同BAR region中。
+    // 这里，它们在同一个BAR region中，即BAR-2;
 	vpci->pci_hdr.msix.table_offset = cpu_to_le32(2);
 	vpci->pci_hdr.msix.pba_offset = cpu_to_le32(2 | VIRTIO_MSIX_TABLE_SIZE);
 	vpci->config_vector = VIRTIO_MSI_NO_VECTOR;
