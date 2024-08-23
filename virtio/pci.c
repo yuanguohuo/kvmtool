@@ -17,11 +17,12 @@
 //Yuanguo: 关于"MSI", "GSI", "IRQ"等概念（摘自https://stackoverflow.com/questions/45206171/how-sci-system-control-interrupt-vector-is-defined）
 //
 // 名词:
-//     PIC:  Programmable Interrupt Controller, 特指8259A.
-//     APIC: Advanced PIC (Advanced Programmable Interrupt Controller)
+//     PIC:  Programmable Interrupt Controller, 特指master-slave级联的2个8259A.
+//     APIC: Advanced PIC (Advanced Programmable Interrupt Controller)；每个CPU有一个Local-APIC，系统有一个或者多个IO-APIC.
 //     ACPI: Advanced Configuration and Power Interface. 是一个specification，包含很多东西，其中一个是使用GSI来进行interrupt routing
-//     Interrupt vector number: Intel的叫法，INT，就是指向IDT中的一个条目的index；
-//     System vector number: GSI number
+//     IRQ: PIC/APIC中的概念，就是中断控制器的引脚号；PIC有15个, IRQ0, IRQ1, IRQ3, ..., IRQ15 (注意IRQ2用于级联). IO-APIC有24个, IRQ0, IRQ1..., IRQ23.
+//     Interrupt vector number: 中断向量，Intel的叫法，简称INT；就是指向IDT中的一个条目的index；
+//     System vector number: GSI number. 系统中每个中断源唯一的中断编号，所以数量比较大，比如kvm默认支持1024个(虚拟的)GSI.
 //
 // 一. 如何产生IRQ:
 //
@@ -473,7 +474,7 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
     //   这里是为不同的bar-region注册不同的callback;
     //           port-mapped io region   : virtio_pci_legacy__io_mmio_callback
     //           memory-mapped io region : virtio_pci_modern__io_mmio_callback (pci access主要是通过这个callback进行的，包括配置MSI中断)
-    //           msix_io region          : virtio_pci__msix_mmio_callback      (update MSI中断配置?)
+    //           msix_io region          : virtio_pci__msix_mmio_callback      (配置msix-table表)
 	r = pci__register_bar_regions(kvm, &vpci->pci_hdr,
 				      virtio_pci__bar_activate,
 				      virtio_pci__bar_deactivate, vdev);

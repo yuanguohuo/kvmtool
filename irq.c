@@ -16,6 +16,71 @@ int next_gsi;
 struct msi_routing_ops irq__default_routing_ops;
 struct msi_routing_ops *msi_routing_ops = &irq__default_routing_ops;
 
+//Yuanguo:
+//  irq_routing是这样一张表。构建好之后，通过ioctl(vm_fd, KVM_SET_GSI_ROUTING, irq_routing)设置到内核kvm module中。以后要发起中断:
+//
+//    1. irqchip方式(8259A或者IOAPIC):
+//        ioctl(kvm->vm_fd, KVM_IRQ_LINE, {.irq=gsi});
+//        见x86/kvm.c : kvm__irq_trigger()
+//
+//    2. msi方式:
+//        ioctl(kvm->vm_fd, KVM_SIGNAL_MSI, {.address_lo=x .address_hi=y, data=z});
+//        见irq.c : irq__signal_msi()
+//
+//    所以中断虚拟化主要工作是kvm内核模块完成的，kvmtool只负责构建这张表。
+//        - 对于irqchip方式，kvm内核模块模拟芯片(8259A或者IOAPIC)行为，更新芯片的相关寄存器，并唤醒guest vcpu，注入中断；
+//        - 对于msi方式，kvm内核模块往guest的内存addr写data；内存addr映射的是vcpu的Local-APIC的寄存器；
+//
+//        | gsi | type                     | u.irqchip.irqchip            | u.irqchip.pin |
+//        |-----|--------------------------|------------------------------|---------------|
+//        | 0   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 0             |
+//        | 1   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 1             |
+//        |     |                          |                              |               |
+//        | 3   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 3             |
+//        | 4   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 4             |
+//        | 5   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 5             |
+//        | 6   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 6             |
+//        | 7   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_MASTER(Master-8259A) | 7             |
+//        | 8   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 0             |
+//        | 9   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 1             |
+//        | 10  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 2             |
+//        | 11  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 3             |
+//        | 12  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 4             |
+//        | 13  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 5             |
+//        | 14  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 6             |
+//        | 15  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_SLAVE(Slave-8259A)   | 7             |
+//        | 0   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 2             |
+//        | 1   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 1             |
+//        |     |                          |                              |               |
+//        | 3   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 3             |
+//        | 4   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 4             |
+//        | 5   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 5             |
+//        | 6   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 6             |
+//        | 7   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 7             |
+//        | 8   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 8             |
+//        | 9   | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 9             |
+//        | 10  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 10            |
+//        | 11  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 11            |
+//        | 12  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 12            |
+//        | 13  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 13            |
+//        | 14  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 14            |
+//        | 15  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 15            |
+//        | 16  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 16            |
+//        | 17  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 17            |
+//        | 18  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 18            |
+//        | 19  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 19            |
+//        | 20  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 20            |
+//        | 21  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 21            |
+//        | 22  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 22            |
+//        | 23  | KVM_IRQ_ROUTING_IRQCHIP  | IRQCHIP_IOAPIC               | 23            |
+//
+//        | gsi | type                     | u.msi.address_hi | u.msi.address_lo | u.msi.data |
+//        |-----|--------------------------|------------------|------------------|------------|
+//        | 24  | KVM_IRQ_ROUTING_MSI      | 0x0              | 0xfee00000       | 0x4022     |
+//        | 25  | KVM_IRQ_ROUTING_MSI      | 0x0              | 0xfee1f000       | 0x4021     |
+//        | 26  | KVM_IRQ_ROUTING_MSI      | 0x0              | 0xfee01000       | 0x4022     |
+//        | 27  | KVM_IRQ_ROUTING_MSI      | 0x0              | 0xfee02000       | 0x4022     |
+//        | ... | ...                      | ...              | ...              | ...        |
 struct kvm_irq_routing *irq_routing = NULL;
 
 int irq__alloc_line(void)
