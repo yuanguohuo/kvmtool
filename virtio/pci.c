@@ -472,7 +472,7 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
     //Yuanguo: guest对bar-region的访问(读写)会导致vmexit；
     //   vmexit发生时，VMM(qemu, kvmtool)看访问的是哪个bar-region，然后调用对应的callback去处理；
     //   这里是为不同的bar-region注册不同的callback;
-    //           port-mapped io region   : virtio_pci_legacy__io_mmio_callback
+    //           port-mapped io region   : virtio_pci_modern__io_mmio_callback
     //           memory-mapped io region : virtio_pci_modern__io_mmio_callback (pci access主要是通过这个callback进行的，包括配置MSI中断)
     //           msix_io region          : virtio_pci__msix_mmio_callback      (配置msix-table表)
 	r = pci__register_bar_regions(kvm, &vpci->pci_hdr,
@@ -487,7 +487,7 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 	};
 
     //Yuanguo:
-    //  quest读PCI设备的configuration space:
+    //  guest读PCI设备的configuration space:
     //      - 从.status知道启用了Capability List；
     //      - 从.capabilities知道第一个capability在configuration space的哪个位置；
     //  读到第一个capability之后，就知道这个capability是PCI_CAP_ID_MSIX，以及其他详细信息:

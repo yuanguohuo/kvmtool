@@ -92,6 +92,15 @@ static void virtio_blk_do_io_request(struct kvm *kvm, struct virt_queue *vq, str
 	bdev		= req->bdev;
 	iov		= req->iov;
 
+    //Yuanguo:
+    //  req既可能是read请求又可能是write请求；
+    //  无论是read还是write，req->iov中都有一个struct virtio_blk_outhdr结构体；
+    //  正是这个结构体告诉我们，本请求是read还是write；
+    //      - 若是read： req->iov前面1个或几个buffer(iovec结构)是输出(buffer个数是req->out)，即输出virtio_blk_outhdr结构体；后面的buffer(iovec结构)是空的，用于输入，个数是req->in;
+    //        注意空的buffer(iovec结构)也是有效的，它的长度(iovec::iov_len)也是大于0的；
+    //      - 若是write：req->iov全部buffer(iovec结构)都是输出(个数是req->out; req->in应该等于0)；输出中，最开始是virtio_blk_outhdr结构体，后面是真实负载；
+
+    //Yuanguo: 先读出struct virtio_blk_outhdr结构体；然后就知道是read还是write以及读写的起始sector；
 	iovcount = req->out;
 	len = memcpy_fromiovec_safe(&req_hdr, &iov, sizeof(req_hdr), &iovcount);
 	if (len) {
