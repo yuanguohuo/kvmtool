@@ -72,9 +72,11 @@ void virtio_blk_complete(void *param, long len)
 	*status	= (len < 0) ? VIRTIO_BLK_S_IOERR : VIRTIO_BLK_S_OK;
 
 	mutex_lock(&bdev->mutex);
+    //Yuanguo: used-buffer放进queue
 	virt_queue__set_used_elem(req->vq, req->head, len);
 	mutex_unlock(&bdev->mutex);
 
+    //Yuanguo: 触发中断；对于PCI transport，signal_vq指向virtio_pci__signal_vq()函数；
 	if (virtio_queue__should_signal(&bdev->vqs[queueid]))
 		bdev->vdev.ops->signal_vq(req->kvm, &bdev->vdev, queueid);
 }
@@ -96,8 +98,8 @@ static void virtio_blk_do_io_request(struct kvm *kvm, struct virt_queue *vq, str
     //  req既可能是read请求又可能是write请求；
     //  无论是read还是write，req->iov中都有一个struct virtio_blk_outhdr结构体；
     //  正是这个结构体告诉我们，本请求是read还是write；
-    //      - 若是read： req->iov前面1个或几个buffer(iovec结构)是输出(buffer个数是req->out)，即输出virtio_blk_outhdr结构体；后面的buffer(iovec结构)是空的，用于输入，个数是req->in;
-    //        注意空的buffer(iovec结构)也是有效的，它的长度(iovec::iov_len)也是大于0的；
+    //      - 若是read： req->iov前面1个或几个buffer(iovec结构)是输出(buffer个数是req->out)，即输出virtio_blk_outhdr结构体；后面的buffer(iovec结构)是空的，
+    //        用于输入，个数是req->in; 注意空的buffer(iovec结构)也是有效的，它的长度(iovec::iov_len)也是大于0的；
     //      - 若是write：req->iov全部buffer(iovec结构)都是输出(个数是req->out; req->in应该等于0)；输出中，最开始是virtio_blk_outhdr结构体，后面是真实负载；
 
     //Yuanguo: 先读出struct virtio_blk_outhdr结构体；然后就知道是read还是write以及读写的起始sector；
@@ -153,9 +155,13 @@ static void virtio_blk_do_io(struct kvm *kvm, struct virt_queue *vq, struct blk_
 	struct blk_dev_req *req;
 	u16 head;
 
+    //Yuanguo: 检查avaiable-buffer queue是否不空
 	while (virt_queue__available(vq)) {
+        //Yuanguo: 获取avaiable-buffer queue的head；它是Descriptor Area表的index；
 		head		= virt_queue__pop(vq);
+        //Yuanguo: reqs和Descriptor Area表一一对应；
 		req		= &bdev->reqs[head];
+        //Yuanguo: 从Descriptor Area的表项中得到buffer的地址和长度，放到req->iov中，并不拷贝buffer本身；
 		req->head	= virt_queue__get_head_iov(vq, req->iov, &req->out,
 					&req->in, head, kvm);
 		req->vq		= vq;

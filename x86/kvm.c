@@ -197,6 +197,7 @@ void kvm__irq_line(struct kvm *kvm, int irq, int level)
 		die_perror("KVM_IRQ_LINE failed");
 }
 
+//Yuanguo: 模拟边沿触发，所以发一个高电平加一个低电平
 void kvm__irq_trigger(struct kvm *kvm, int irq)
 {
 	kvm__irq_line(kvm, irq, 1);

@@ -59,6 +59,7 @@ int irq__init(struct kvm *kvm)
 		return errno;
 	}
 
+    //Yuanguo: next_gsi=24；所以MSI的GSI从24开始
 	next_gsi = i;
 
 	return 0;

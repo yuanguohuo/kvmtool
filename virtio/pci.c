@@ -201,6 +201,14 @@ int virtio_pci_init_vq(struct kvm *kvm, struct virtio_device *vdev, int vq)
 	int ret;
 	struct virtio_pci *vpci = vdev->virtio;
 
+    //Yuanguo: 也可以跳过对virtio_pci__init_ioeventfd()的调用；
+    //  假如跳过，notification就会通过这个方式发送过来：
+    //      virtio_pci_modern__io_mmio_callback() -->
+    //      virtio_pci_access()
+    //      {
+    //        case VPCI_CFG_NOTIFY_START...VPCI_CFG_NOTIFY_END:
+    //          virtio_pci__notify_write()
+    //      }
 	ret = virtio_pci__init_ioeventfd(kvm, vdev, vq);
 	if (ret) {
 		pr_err("couldn't add ioeventfd for vq %d: %d", vq, ret);
@@ -278,6 +286,8 @@ static void virtio_pci__msix_mmio_callback(struct kvm_cpu *vcpu,
 	table  = vpci->msix_table;
 	offset = addr - msix_io_addr;
 
+    //Yuanguo: vecnum是设备的vector number，就是在msix_table中的index；
+    //  configure-queue的vector number是0，common-queue的vector number是1, 2, ...
 	vecnum = offset / sizeof(struct msix_table);
 	offset = offset % sizeof(struct msix_table);
 
@@ -507,6 +517,7 @@ int virtio_pci__init(struct kvm *kvm, void *dev, struct virtio_device *vdev,
 	 * For example, a returned value of "00000000011"
 	 * indicates a table size of 4.
 	 */
+    //Yuanguo: VIRTIO_NR_MSIX=33(32个common-queue, 1个configure-queue)，所以msix.ctrl = 32，表示32个common-queue;
 	vpci->pci_hdr.msix.ctrl = cpu_to_le16(VIRTIO_NR_MSIX - 1);
 
 	/* Both table and PBA are mapped to the same BAR (2) */

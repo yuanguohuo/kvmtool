@@ -307,6 +307,7 @@ void virtio_pci_modern__io_mmio_callback(struct kvm_cpu *vcpu, u64 addr,
 	virtio_pci_access(vcpu, vdev, addr - mmio_addr, data, len, is_write);
 }
 
+//Yuanguo: 初始化virtio的capabilities;
 int virtio_pci_modern_init(struct virtio_device *vdev)
 {
 	int subsys_id;

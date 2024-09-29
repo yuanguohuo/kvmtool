@@ -16,6 +16,10 @@ static void virtio_vhost_signal_vq(struct kvm *kvm, struct epoll_event *ev)
 	u64 tmp;
 	struct virt_queue *queue = ev->data.ptr;
 
+    //Yuanguo: queue->irqfd是向guest发起中断用的，vhost device通过write(queue->irqfd)向guest发起中断。
+    //问：这里为什么要read(queue->irqfd)呢？中断是发给guest的，又不是发给kvmtool的；
+    //答：猜测是起一个补漏的作用。当kvm或者guest没有poll queue->irqfd的时候，这里就会读到，
+    //    然后使用ioctl方式重发。
 	if (read(queue->irqfd, &tmp, sizeof(tmp)) < 0)
 		pr_warning("%s: failed to read eventfd", __func__);
 
@@ -164,6 +168,21 @@ void virtio_vhost_set_vring_irqfd(struct kvm *kvm, u32 gsi,
 		/* Disconnect user polling thread */
 		epoll_ctl(epoll.fd, EPOLL_CTL_DEL, fd, NULL);
 
+    //Yuanguo: 原本device要给guest发中断是通过ioctl完成的：
+    //    1. irqchip方式(8259A或者IOAPIC):
+    //        ioctl(kvm->vm_fd, KVM_IRQ_LINE, {.irq=gsi});
+    //        见x86/kvm.c : kvm__irq_trigger()
+    //
+    //    2. msi方式:
+    //        ioctl(kvm->vm_fd, KVM_SIGNAL_MSI, {.address_lo=x .address_hi=y, data=z});
+    //        见irq.c : irq__signal_msi()
+    // 这里Connect the direct IRQFD route，就是告诉kvm：发中断不再通过ioctl系统调用了，而是通过fd(即queue->irqfd)的写操作来完成：
+    //    - 用户态(例如vhost-user device?)发起中断：直接write(fd);
+    //    - 内核态(例如vhost device?)发起中断：eventfd_signal(...);
+    //
+    //问：virtio_vhost_signal_vq()函数中，为什么要read(queue->irqfd)呢？中断是发给guest的，又不是发给kvmtool的.
+    //答：猜测是起一个补漏的作用。当kvm或者guest没有poll queue->irqfd的时候，virtio_vhost_signal_vq()就会读到，
+    //    然后使用ioctl方式重发。
 	/* Connect the direct IRQFD route */
 	r = irq__add_irqfd(kvm, gsi, fd, -1);
 	if (r < 0)

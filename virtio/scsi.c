@@ -118,6 +118,9 @@ static void notify_vq_gsi(struct kvm *kvm, void *dev, u32 vq, u32 gsi)
 	if (sdev->vhost_fd == 0)
 		return;
 
+    //Yuanguo:
+    //  原本device要给guest发中断是通过ioctl完成的,
+    //  这里是告诉kvm：发中断不再通过ioctl系统调用了，而是通过sdev->vqs[vq].irqfd的写操作来完成。
 	virtio_vhost_set_vring_irqfd(kvm, gsi, &sdev->vqs[vq]);
 }
 
@@ -128,6 +131,7 @@ static void notify_vq_eventfd(struct kvm *kvm, void *dev, u32 vq, u32 efd)
 	if (sdev->vhost_fd == 0)
 		return;
 
+    //Yuanguo: 告诉vhost-scsi内核模块，从efd (eventfd)上接收notifications;
 	virtio_vhost_set_vring_kick(kvm, sdev->vhost_fd, vq, efd);
 }
 
